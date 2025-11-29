@@ -98,6 +98,32 @@ elif is_message(action):
 
 에이전트는 사용자 환경을 **직접 볼 수 없고**, 물어봐야 함.
 
+### 2.4 Partially Decoupled MDP (논문 정의의 한계)
+
+논문에서는 **Decoupled MDP**로 정의하지만, 실제로는 **비대칭적 결합** 구조:
+
+**User (완전 독립):**
+- Agent의 tool을 **전혀 모름**
+- 그냥 "문제가 있다"고 말하고, Agent가 해결해주길 기대
+- Agent가 뭘 할 수 있는지 관심 없음
+
+**Agent (약하게 결합):**
+- User의 tool API는 모름 (`toggle_airplane_mode()` 같은 함수명)
+- 하지만 User가 **뭘 할 수 있는지** 대략 앎 (domain knowledge via system prompt)
+- "사용자가 비행기 모드를 끌 수 있다"는 자연어 수준의 지식 보유
+
+```
+Agent knows: A_π (정확히) + description(A_μ) (자연어로 대략)
+User knows: A_μ (정확히) + nothing about A_π
+```
+
+**더 정확한 표현:**
+- **Asymmetric Information MDP** 또는
+- **Partially Decoupled MDP**
+
+현실적으로 완전한 분리는 불가능 - 협력하려면 상대가 뭘 할 수 있는지 어느 정도는 알아야 함.
+Agent는 User를 **지시/안내**해야 하므로 User capability의 자연어 description이 필요.
+
 ---
 
 ## 3. 벤치마크 구성
