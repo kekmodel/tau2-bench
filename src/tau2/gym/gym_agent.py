@@ -945,10 +945,10 @@ class AgentGymEnv(gym.Env):
         """
         Retrieve the task configuration for the specified task ID.
 
-        This method loads all tasks for the domain using the registry's
-        task loader and finds the one matching the specified task_id.
-        Tasks contain the scenario, user instructions, and evaluation
-        criteria for the simulation.
+        This method searches for a task matching the specified task_id
+        across all task sets related to the domain. It first tries the
+        domain's default task loader, then searches related task sets
+        (e.g., telecom_small, telecom_full for telecom domain).
 
         Returns:
             The Task object corresponding to the specified task_id.
@@ -959,10 +959,29 @@ class AgentGymEnv(gym.Env):
             ValueError: If no task is found with the specified task_id
                        for the given domain
         """
-        tasks = registry.get_tasks_loader(self.domain)()
-        for task in tasks:
-            if task.id == self.task_id:
-                return task
+        # First, try the domain's default task loader
+        try:
+            tasks = registry.get_tasks_loader(self.domain)()
+            for task in tasks:
+                if task.id == self.task_id:
+                    return task
+        except Exception:
+            pass
+
+        # If not found, search in related task sets (e.g., telecom_small, telecom_full)
+        info = registry.get_info()
+        related_task_sets = [ts for ts in info.task_sets if ts.startswith(self.domain)]
+        for task_set in related_task_sets:
+            if task_set == self.domain:
+                continue  # Already tried above
+            try:
+                tasks = registry.get_tasks_loader(task_set)()
+                for task in tasks:
+                    if task.id == self.task_id:
+                        return task
+            except Exception:
+                pass
+
         raise ValueError(
             f"No task found with id {self.task_id} for domain {self.domain}"
         )
