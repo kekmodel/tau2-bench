@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Load .env BEFORE any other imports to ensure environment variables are set
+from dotenv import load_dotenv
+load_dotenv()
+
 import logging
 from typing import Optional
 
@@ -435,12 +439,14 @@ Leave empty to use the default LLM.
     )
     console.print(llm_panel)
 
+    from tau2.config import DEFAULT_LLM_USER
+
     user_llm = Prompt.ask(
-        "\n[bold blue]Enter User LLM name[/bold blue] (or press Enter for default)",
+        f"\n[bold blue]Enter User LLM name[/bold blue] (or press Enter for default: {DEFAULT_LLM_USER})",
         default="",
     )
 
-    return user_llm if user_llm.strip() else None
+    return user_llm if user_llm.strip() else DEFAULT_LLM_USER
 
 
 def get_agent_llm_config():
