@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from typing import Any, Optional
 
@@ -66,10 +67,12 @@ else:
     litellm.disable_cache()
 
 
-ALLOW_SONNET_THINKING = False
+ALLOW_SONNET_THINKING = os.environ.get("TAU2_ALLOW_THINKING", "false").lower() == "true"
 
 if not ALLOW_SONNET_THINKING:
     logger.warning("Sonnet thinking is disabled")
+else:
+    logger.info("Extended thinking is enabled for Claude models")
 
 
 def _parse_ft_model_name(model: str) -> str:
@@ -157,13 +160,19 @@ def to_litellm_messages(messages: list[Message]) -> list[dict]:
                     }
                     for tc in message.tool_calls
                 ]
-            litellm_messages.append(
-                {
-                    "role": "assistant",
-                    "content": message.content,
-                    "tool_calls": tool_calls,
-                }
-            )
+            msg_dict = {
+                "role": "assistant",
+                "content": message.content,
+                "tool_calls": tool_calls,
+            }
+            # Include thinking_blocks for Claude extended thinking
+            # When extended thinking is enabled, Claude requires previous assistant
+            # messages to include their thinking_blocks for continuation
+            if message.raw_data:
+                thinking_blocks = message.raw_data.get("thinking_blocks")
+                if thinking_blocks:
+                    msg_dict["thinking_blocks"] = thinking_blocks
+            litellm_messages.append(msg_dict)
         elif isinstance(message, ToolMessage):
             litellm_messages.append(
                 {
@@ -199,8 +208,22 @@ def generate(
     if kwargs.get("num_retries") is None:
         kwargs["num_retries"] = DEFAULT_MAX_RETRIES
 
-    if model.startswith("claude") and not ALLOW_SONNET_THINKING:
-        kwargs["thinking"] = {"type": "disabled"}
+    if model.startswith("claude"):
+        if ALLOW_SONNET_THINKING:
+            # Enable extended thinking with configurable budget
+            # Note: thinking requires temperature=1
+            budget_tokens = int(os.environ.get("TAU2_THINKING_BUDGET", "1024"))
+            kwargs.setdefault("thinking", {"type": "enabled", "budget_tokens": budget_tokens})
+            kwargs["temperature"] = 1.0  # Required for thinking
+            # Enable interleaved thinking for tool use (Claude 4 models)
+            # This allows Claude to think after receiving tool results
+            # See: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#interleaved-thinking
+            kwargs.setdefault("extra_headers", {})
+            kwargs["extra_headers"]["anthropic-beta"] = "interleaved-thinking-2025-05-14"
+            logger.info(f"Extended thinking enabled for {model}: budget={budget_tokens}, interleaved=True")
+        else:
+            kwargs["thinking"] = {"type": "disabled"}
+            logger.info(f"Extended thinking disabled for {model}")
     litellm_messages = to_litellm_messages(messages)
     tools = [tool.openai_schema for tool in tools] if tools else None
     if tools and tool_choice is None:
@@ -241,13 +264,48 @@ def generate(
     ]
     tool_calls = tool_calls or None
 
+    # Capture reasoning_content from extended thinking (if available)
+    # litellm may expose thinking in different ways depending on model
+    reasoning_content = getattr(response.message, "reasoning_content", None)
+    thinking_blocks = getattr(response.message, "thinking_blocks", None)
+
+    raw_data = response.to_dict()
+
+    # Check message dict in raw_data for thinking
+    msg_dict = raw_data.get("message", {})
+    if isinstance(msg_dict, dict):
+        if "thinking_blocks" in msg_dict:
+            thinking_blocks = msg_dict["thinking_blocks"]
+        if "reasoning_content" in msg_dict:
+            reasoning_content = msg_dict["reasoning_content"]
+
+    # Check for model_extra (pydantic extra fields)
+    if hasattr(response.message, "model_extra"):
+        extra = response.message.model_extra
+        if extra and isinstance(extra, dict):
+            if "thinking_blocks" in extra:
+                thinking_blocks = extra["thinking_blocks"]
+            if "reasoning_content" in extra:
+                reasoning_content = extra["reasoning_content"]
+
+    # Check raw_data directly
+    if "thinking_blocks" in raw_data and not thinking_blocks:
+        thinking_blocks = raw_data["thinking_blocks"]
+    if "reasoning_content" in raw_data and not reasoning_content:
+        reasoning_content = raw_data["reasoning_content"]
+
+    if reasoning_content:
+        raw_data["reasoning_content"] = reasoning_content
+    if thinking_blocks:
+        raw_data["thinking_blocks"] = thinking_blocks
+
     message = AssistantMessage(
         role="assistant",
         content=content,
         tool_calls=tool_calls,
         cost=cost,
         usage=usage,
-        raw_data=response.to_dict(),
+        raw_data=raw_data,
     )
     return message
 
